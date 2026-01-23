@@ -44,6 +44,14 @@ print(f"Error Range: [{error.min()}, {error.max()}]")
 print(f"Velocity Range: [{velocity.min()}, {velocity.max()}]")
 print(f"Thrust Range: [{thrust.min()}, {thrust.max()}]")
 
+# Randomize the dataset
+indices = np.arange(len(data))
+np.random.shuffle(indices)
+error = error[indices]
+velocity = velocity[indices]
+thrust = thrust[indices]
+print("Dataset randomized (shuffled).")
+
 with cx.variable.Realize(cx.variable.path_from(root_dir, 'img', 'error_data')) as v_error:
     v_error[0] = error
 
