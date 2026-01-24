@@ -1,64 +1,45 @@
 import sys
-import pycxsom as cx
-import numpy as np
 import os
+import numpy as np
+import pycxsom as cx
 
-"""
-This opens rocket-discrete-controller.dat and "copies" it into cxsom variables (img/error_data, img/velocity_data, img/thrust_data).
-The data is normalized to [0, 1].
-"""
+def normalize(v):
+    v_min, v_max = v.min(), v.max()
+    if v_max - v_min == 0: return v
+    return (v - v_min) / (v_max - v_min)
 
 if len(sys.argv) < 2:
-    print(f'Usage : {sys.argv[0]} <root-dir>')
-    sys.exit(0)
+    print(f"Usage : {sys.argv[0]} <root-dir>")
+    sys.exit(1)
 
 root_dir = sys.argv[1]
-data_path = os.path.join(os.path.dirname(__file__), 'data', 'rocket-discrete-controller.dat')
+data_file = "data/rocket-discrete-controller.dat"
 
-if not os.path.exists(data_path):
-    print(f"Error: Data file not found at {data_path}")
+if not os.path.exists(data_file):
+    print(f"Error: {data_file} not found.")
     sys.exit(1)
 
-# Load data
-try:
-    data = np.loadtxt(data_path)
-except Exception as e:
-    print(f"Error loading data: {e}")
-    sys.exit(1)
+# Chargement et préparation
+raw_data = np.loadtxt(data_file)
+np.random.shuffle(raw_data) # Important !
 
-# 0: Error, 1: Velocity, 2: Thrust
-raw_error = data[:, 0]
-raw_velocity = data[:, 1]
-raw_thrust = data[:, 2]
+errors = normalize(raw_data[:, 0])
+velocities = normalize(raw_data[:, 1])
+thrusts = normalize(raw_data[:, 2])
 
-# Normalize Error and Velocity: [-98.0392, 98.0392] -> [0, 1]
-# We use the observed min/max to fill the whole space [0,1]
-error = (raw_error - raw_error.min()) / (raw_error.max() - raw_error.min())
-velocity = (raw_velocity - raw_velocity.min()) / (raw_velocity.max() - raw_velocity.min())
+nb_samples = len(raw_data)
+print(f"Data Loaded. Shape: {raw_data.shape}")
 
-# Normalize Thrust: {0, 15} -> {0, 1}
-thrust = raw_thrust / 15.0
+# Écriture avec définition explicite pour création automatique si inexistant
+type_str = f'Map1D<Scalar>={nb_samples}'
 
-print(f"Data Loaded. Shape: {data.shape}")
-print(f"Error Range: [{error.min()}, {error.max()}]")
-print(f"Velocity Range: [{velocity.min()}, {velocity.max()}]")
-print(f"Thrust Range: [{thrust.min()}, {thrust.max()}]")
+def write_var(name, data):
+    path = cx.variable.path_from(root_dir, 'img', name)
+    # On spécifie le type, cache_size et file_size pour permettre la création
+    with cx.variable.Realize(path, cx.typing.make(type_str), 1, nb_samples) as v:
+        v[0] = data
+        print(f"Written {name}")
 
-# Randomize the dataset
-indices = np.arange(len(data))
-np.random.shuffle(indices)
-error = error[indices]
-velocity = velocity[indices]
-thrust = thrust[indices]
-print("Dataset randomized (shuffled).")
-
-with cx.variable.Realize(cx.variable.path_from(root_dir, 'img', 'error_data')) as v_error:
-    v_error[0] = error
-
-with cx.variable.Realize(cx.variable.path_from(root_dir, 'img', 'velocity_data')) as v_velocity:
-    v_velocity[0] = velocity
-
-with cx.variable.Realize(cx.variable.path_from(root_dir, 'img', 'thrust_data')) as v_thrust:
-    v_thrust[0] = thrust
-
-print("cxsom variables written.")
+write_var('error_data', errors)
+write_var('velocity_data', velocities)
+write_var('thrust_data', thrusts)

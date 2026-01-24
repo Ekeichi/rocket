@@ -1,12 +1,12 @@
 /*
+  Rocket Controller Logic with CXSOM
 
-  Here, we consider 3 connected maps one handling W, the other H (the
-  coordinates in an image), and the last the RGB value of the
-  pixel. We train the map with (W, H, RGB) triplets, and then we let
-  the architecture retrieve thr RGB value from the coordinates.
+  We train 3 connected maps:
+  - Error (state)
+  - Velocity (state)
+  - Thrust (action to predict)
 
-  There ar several modes, each one is made of specific rules. See make_*_rule
-  functions.
+  The system learns the association (Error, Velocity) <-> Thrust.
 */
 
 #include <cxsom-builder.hpp>
@@ -24,7 +24,7 @@
 #define FOREVER -1 // Infinite walltime
 #define DEADLINE 100
 
-#define MAP_SIZE 1500
+#define MAP_SIZE 500
 
 // cxsom declarations
 using namespace cxsom::rules;
@@ -40,19 +40,27 @@ enum class Mode : char { Calibration, Input, Train, Check, Predict, Walltime };
 
 #define Rext .05
 #define Rctx .003
+
 struct Params {
-  kwd::parameters main, match_ctx, match_pos, match_rgb, learn, learn_pos_e,
-      learn_pos_c, learn_rgb_e, learn_rgb_c, external, contextual, global;
+  kwd::parameters main, match_ctx, match_state, match_thrust, learn,
+      learn_state_e, learn_state_c, learn_thrust_e, learn_thrust_c, external,
+      contextual, global;
+
   Params() {
     main | kwd::use("walltime", FOREVER), kwd::use("epsilon", 0);
+
     match_ctx | main, kwd::use("sigma", .075);
-    match_pos | main, kwd::use("sigma", .075);
-    match_rgb | main, kwd::use("sigma", .075);
+
+    match_state | main, kwd::use("sigma", .075);
+    match_thrust | main, kwd::use("sigma", .075);
+
     learn | main, kwd::use("alpha", .1);
-    learn_pos_e | learn, kwd::use("r", Rext);
-    learn_pos_c | learn, kwd::use("r", Rctx);
-    learn_rgb_e | learn, kwd::use("r", Rext);
-    learn_rgb_c | learn, kwd::use("r", Rctx);
+
+    learn_state_e | learn, kwd::use("r", Rext);
+    learn_state_c | learn, kwd::use("r", Rctx);
+    learn_thrust_e | learn, kwd::use("r", Rext);
+    learn_thrust_c | learn, kwd::use("r", Rctx);
+
     external | main;
     contextual | main;
     global | main, kwd::use("random-bmu", 1), kwd::use("beta", .5),
@@ -73,20 +81,22 @@ auto make_map_settings(const Params &p) {
   return map_settings;
 }
 
-auto rgb_inputs(const std::string &timeline, unsigned int trace,
-                bool to_be_defined) {
-  auto W = cxsom::builder::variable(timeline, cxsom::builder::name("w"),
-                                    "Pos1D", CACHE, trace, OPENED);
-  auto H = cxsom::builder::variable(timeline, cxsom::builder::name("h"),
-                                    "Pos1D", CACHE, trace, OPENED);
-  auto RGB = cxsom::builder::variable(timeline, cxsom::builder::name("rgb"),
-                                      "Array=3", CACHE, trace, OPENED);
+// Helper pour déclarer les variables principales
+auto rocket_inputs(const std::string &timeline, unsigned int trace,
+                   bool to_be_defined) {
+  auto ERR = cxsom::builder::variable(timeline, cxsom::builder::name("error"),
+                                      "Scalar", CACHE, trace, OPENED);
+  auto VEL =
+      cxsom::builder::variable(timeline, cxsom::builder::name("velocity"),
+                               "Scalar", CACHE, trace, OPENED);
+  auto THR = cxsom::builder::variable(timeline, cxsom::builder::name("thrust"),
+                                      "Scalar", CACHE, trace, OPENED);
   if (to_be_defined) {
-    W->definition();
-    H->definition();
-    RGB->definition();
+    ERR->definition();
+    VEL->definition();
+    THR->definition();
   }
-  return std::make_tuple(W, H, RGB);
+  return std::make_tuple(ERR, VEL, THR);
 }
 
 // #####################
@@ -97,42 +107,38 @@ auto rgb_inputs(const std::string &timeline, unsigned int trace,
 
 void make_calibration_rules(unsigned grid_side) {
   Params p;
-
-  // This mode is not really a simulation, but a mode where the impact
-  // of the Gaussian parameter values can be displayed, in order to
-  // tune them (i.e. calibration).
-
   {
     timeline t("calibration");
 
-    kwd::type("rgb-ref", "Array=3", 2, 1, OPENED);
-    kwd::type("pos-ref", "Scalar", 2, 1, OPENED);
-    kwd::type("rgb-samples",
-              std::string("Map1D<Array=3>=") +
-                  std::to_string(grid_side * grid_side),
-              2, 1, OPENED);
-    kwd::type("pos-samples",
+    kwd::type("thrust-ref", "Scalar", 2, 1, OPENED);
+    kwd::type("state-ref", "Scalar", 2, 1, OPENED);
+
+    unsigned int volume = grid_side * grid_side;
+
+    kwd::type("thrust-samples",
+              std::string("Map1D<Scalar>=") + std::to_string(volume), 2, 1,
+              OPENED);
+    kwd::type("state-samples",
               std::string("Map1D<Scalar>=") + std::to_string(grid_side), 2, 1,
               OPENED);
-    kwd::type("rgb-match",
-              std::string("Map1D<Scalar>=") +
-                  std::to_string(grid_side * grid_side),
-              2, 1, OPENED);
-    kwd::type("pos-match",
+    kwd::type("thrust-match",
+              std::string("Map1D<Scalar>=") + std::to_string(volume), 2, 1,
+              OPENED);
+    kwd::type("state-match",
               std::string("Map1D<Scalar>=") + std::to_string(grid_side), 2, 1,
               OPENED);
     kwd::type("ctx-match",
               std::string("Map1D<Scalar>=") + std::to_string(grid_side), 2, 1,
               OPENED);
 
-    kwd::at("rgb-match", 0) << fx::match_gaussian(kwd::at("rgb-ref", 0),
-                                                  kwd::at("rgb-samples", 0)) |
-        p.match_rgb;
-    kwd::at("pos-match", 0) << fx::match_gaussian(kwd::at("pos-ref", 0),
-                                                  kwd::at("pos-samples", 0)) |
-        p.match_pos;
-    kwd::at("ctx-match", 0) << fx::match_gaussian(kwd::at("pos-ref", 0),
-                                                  kwd::at("pos-samples", 0)) |
+    kwd::at("thrust-match", 0) << fx::match_gaussian(
+        kwd::at("thrust-ref", 0), kwd::at("thrust-samples", 0)) |
+        p.match_thrust;
+    kwd::at("state-match", 0) << fx::match_gaussian(
+        kwd::at("state-ref", 0), kwd::at("state-samples", 0)) |
+        p.match_state;
+    kwd::at("ctx-match", 0) << fx::match_gaussian(kwd::at("state-ref", 0),
+                                                  kwd::at("state-samples", 0)) |
         p.match_ctx;
   }
 }
@@ -146,7 +152,7 @@ void make_calibration_rules(unsigned grid_side) {
 void make_walltime_rules(unsigned int walltime) {
   {
     timeline t{"train-in"};
-    "coord" << fx::random() | kwd::use("walltime", walltime);
+    "index" << fx::random() | kwd::use("walltime", walltime);
   }
 }
 
@@ -156,20 +162,21 @@ void make_walltime_rules(unsigned int walltime) {
 // #             #
 // ###############
 
-void make_input_rules(unsigned int img_side) {
-  auto [W, H, RGB] = rgb_inputs("img", img_side * img_side, true);
-  auto COORD = cxsom::builder::variable("img", cxsom::builder::name("coord"),
-                                        "Pos2D", CACHE, 1, OPEN_AS_NEEDED);
-  auto SRC = cxsom::builder::variable("img", cxsom::builder::name("src"),
-                                      std::string("Map2D<Array=3>=") +
-                                          std::to_string(img_side),
-                                      1, 1, OPEN_AS_NEEDED);
-  COORD->definition();
-  SRC->definition();
+void make_input_rules(unsigned int data_size) {
+  if (data_size == 0)
+    data_size = 2601;
 
-  COORD->var() << fx::pair(W->var(), H->var()) | kwd::use("walltime", FOREVER);
-  RGB->var() << fx::value_at(kwd::at(SRC->var(), 0), COORD->var()) |
-      kwd::use("walltime", FOREVER);
+  std::string type = std::string("Map1D<Scalar>=") + std::to_string(data_size);
+
+  cxsom::builder::variable("img", cxsom::builder::name("error_data"), type, 1,
+                           1, OPENED)
+      ->definition();
+  cxsom::builder::variable("img", cxsom::builder::name("velocity_data"), type,
+                           1, 1, OPENED)
+      ->definition();
+  cxsom::builder::variable("img", cxsom::builder::name("thrust_data"), type, 1,
+                           1, OPENED)
+      ->definition();
 }
 
 // ###############
@@ -178,7 +185,7 @@ void make_input_rules(unsigned int img_side) {
 // #             #
 // ###############
 
-void make_train_rules(unsigned int save_period, unsigned int img_side) {
+void make_train_rules(unsigned int save_period, unsigned int data_size) {
 
   Params p;
   auto map_settings = make_map_settings(p);
@@ -186,86 +193,74 @@ void make_train_rules(unsigned int save_period, unsigned int img_side) {
   auto archi = cxsom::builder::architecture();
   archi->timelines = {"train-wgt", "train-rlx", "train-out"};
 
-  // These are the inputs variables definitions. The rules for
-  // computing them are provided below.
-  auto [W, H, R] = rgb_inputs("train-in", TRAIN_TRACE, true);
-  auto COORD =
-      cxsom::builder::variable("train-in", cxsom::builder::name("coord"),
-                               "Pos2D", CACHE, TRAIN_TRACE, OPENED);
-  COORD->definition();
+  auto [ERR, VEL, THR] = rocket_inputs("train-in", TRAIN_TRACE, true);
 
-  // Let us define the maps
+  std::vector<cxsom::builder::Map::Layer *> layers;
+  auto out_layer = std::back_inserter(layers);
 
-  std::vector<cxsom::builder::Map::Layer *>
-      layers; // This will store all layers
-  auto out_layer =
-      std::back_inserter(layers); // for further manipulation on them.
+  auto ERRmap = cxsom::builder::map::make_1D("Error");
+  auto VELmap = cxsom::builder::map::make_1D("Velocity");
+  auto THRmap = cxsom::builder::map::make_1D("Thrust");
 
-  // Let us define the maps
-  auto Wmap = cxsom::builder::map::make_1D("W");
-  auto Hmap = cxsom::builder::map::make_1D("H");
-  auto Rmap = cxsom::builder::map::make_1D("RGB");
+  // --- Connexions ---
+  *(out_layer++) = ERRmap->contextual(VELmap, fx::match_gaussian, p.match_ctx,
+                                      fx::learn_triangle, p.learn_state_c);
+  *(out_layer++) = VELmap->contextual(ERRmap, fx::match_gaussian, p.match_ctx,
+                                      fx::learn_triangle, p.learn_state_c);
+  *(out_layer++) = ERRmap->contextual(THRmap, fx::match_gaussian, p.match_ctx,
+                                      fx::learn_triangle, p.learn_state_c);
+  *(out_layer++) = THRmap->contextual(ERRmap, fx::match_gaussian, p.match_ctx,
+                                      fx::learn_triangle, p.learn_thrust_c);
+  *(out_layer++) = VELmap->contextual(THRmap, fx::match_gaussian, p.match_ctx,
+                                      fx::learn_triangle, p.learn_state_c);
+  *(out_layer++) = THRmap->contextual(VELmap, fx::match_gaussian, p.match_ctx,
+                                      fx::learn_triangle, p.learn_thrust_c);
 
-  // We store the layers since we have to add rules for saving weights.
-  // Let us connect the maps together
+  *(out_layer++) = ERRmap->external(ERR, fx::match_gaussian, p.match_state,
+                                    fx::learn_triangle, p.learn_state_e);
+  *(out_layer++) = VELmap->external(VEL, fx::match_gaussian, p.match_state,
+                                    fx::learn_triangle, p.learn_state_e);
+  *(out_layer++) = THRmap->external(THR, fx::match_gaussian, p.match_thrust,
+                                    fx::learn_triangle, p.learn_thrust_e);
 
-  // First, we set up all the "contextual" (i.e. from map to map) connections.
-  *(out_layer++) = Wmap->contextual(Hmap, fx::match_gaussian, p.match_ctx,
-                                    fx::learn_triangle, p.learn_pos_c);
-  *(out_layer++) = Wmap->contextual(Rmap, fx::match_gaussian, p.match_ctx,
-                                    fx::learn_triangle, p.learn_pos_c);
-  *(out_layer++) = Hmap->contextual(Wmap, fx::match_gaussian, p.match_ctx,
-                                    fx::learn_triangle, p.learn_pos_c);
-  *(out_layer++) = Hmap->contextual(Rmap, fx::match_gaussian, p.match_ctx,
-                                    fx::learn_triangle, p.learn_pos_c);
-  *(out_layer++) = Rmap->contextual(Wmap, fx::match_gaussian, p.match_ctx,
-                                    fx::learn_triangle, p.learn_rgb_c);
-  *(out_layer++) = Rmap->contextual(Hmap, fx::match_gaussian, p.match_ctx,
-                                    fx::learn_triangle, p.learn_rgb_c);
-
-  // Let us provide inputs to the maps, thanks to the "external" layers.
-  *(out_layer++) = Wmap->external(W, fx::match_gaussian, p.match_pos,
-                                  fx::learn_triangle, p.learn_pos_e);
-  *(out_layer++) = Hmap->external(H, fx::match_gaussian, p.match_pos,
-                                  fx::learn_triangle, p.learn_pos_e);
-  *(out_layer++) = Rmap->external(R, fx::match_gaussian, p.match_rgb,
-                                  fx::learn_triangle, p.learn_rgb_e);
-
-  // Let us build up and configure the architecture
-  archi << Wmap << Hmap << Rmap;
+  archi << ERRmap << VELmap << THRmap;
   *archi = map_settings;
 
-  // We set random values for weights at first timestep. This avoid
-  // blocking at step 0 since learning rules consider the weights at
-  // previous timestep.
   for (auto map : archi->maps)
     map->internals_random_at(0);
 
-  // We can now produce the cxsom rules and the description graph.
   archi->realize();
   {
     std::ofstream dot_file("train.dot");
     dot_file << archi->write_dot;
   }
 
-  // We add the rules for the computation of inputs.
-  auto SRC = cxsom::builder::variable("img", cxsom::builder::name("src"),
-                                      std::string("Map2D<Array=3>=") +
-                                          std::to_string(img_side),
-                                      1, 1, OPEN_AS_NEEDED);
-  SRC->definition(); // avoids ??? in architecture display.
-  COORD->var() << fx::random() |
-      kwd::use("walltime", 0); // This wil be changed by clients, for actually
-                               // triggering new inputs.
-  W->var() << fx::first(COORD->var()) | kwd::use("walltime", FOREVER);
-  H->var() << fx::second(COORD->var()) | kwd::use("walltime", FOREVER);
-  R->var() << fx::value_at(kwd::at(SRC->var(), 0), COORD->var()) |
-      kwd::use("walltime", FOREVER); // We get the rgb value from the image
-                                     // collected at "Input" stage.
+  // --- ALIMENTATION ---
+  std::string data_map_type =
+      std::string("Map1D<Scalar>=") + std::to_string(data_size);
 
-  // We add the rules for weight savings. It consists of saving
-  // weights externally (i.e. the 'saved' timeline) every save_period
-  // time steps.
+  auto FILE_ERR = cxsom::builder::variable(
+      "img", cxsom::builder::name("error_data"), data_map_type, 1, 1, OPENED);
+  auto FILE_VEL =
+      cxsom::builder::variable("img", cxsom::builder::name("velocity_data"),
+                               data_map_type, 1, 1, OPENED);
+  auto FILE_THR = cxsom::builder::variable(
+      "img", cxsom::builder::name("thrust_data"), data_map_type, 1, 1, OPENED);
+
+  auto INDEX =
+      cxsom::builder::variable("train-in", cxsom::builder::name("index"),
+                               "Pos1D", CACHE, TRAIN_TRACE, OPENED);
+  INDEX->definition();
+  INDEX->var() << fx::random() | kwd::use("walltime", 0);
+
+  ERR->var() << fx::value_at(kwd::at(FILE_ERR->var(), 0), INDEX->var()) |
+      kwd::use("walltime", FOREVER);
+  VEL->var() << fx::value_at(kwd::at(FILE_VEL->var(), 0), INDEX->var()) |
+      kwd::use("walltime", FOREVER);
+  THR->var() << fx::value_at(kwd::at(FILE_THR->var(), 0), INDEX->var()) |
+      kwd::use("walltime", FOREVER);
+
+  // --- SAUVEGARDE ---
   for (auto layer_ptr : layers) {
     auto W = layer_ptr->_W();
     auto Wsaved = cxsom::builder::variable("saved", W->varname, W->type, CACHE,
@@ -282,111 +277,126 @@ void make_train_rules(unsigned int save_period, unsigned int img_side) {
 // #             #
 // ###############
 
-void make_check_rules(unsigned int saved_weight_at, unsigned int img_side) {
+void make_check_rules(unsigned int saved_weight_at, unsigned int data_size) {
 
-  unsigned int trace = img_side * img_side;
+  unsigned int trace = data_size;
   Params p;
   auto map_settings = make_map_settings(p);
-  map_settings.exposure_file_size =
-      trace; // At the end of this function, we exposed W, H and RGB weights, we
-             // keep trace of them as for a (w, h, rgb) dataset.
-
-  // We could have recordered the BMU positions of the maps like this.
-  // map_settings.bmu_file_size = trace;
+  map_settings.exposure_file_size = trace;
 
   auto archi = cxsom::builder::architecture();
   archi->timelines = {"check-wgt", "check-rlx", "check-out"};
 
-  // Let us retrieve the feature of the weight variables (only for
-  // those who host Pos1D prototypes here).
-  std::string wtype = std::string("Map1D<Pos1D>=") + std::to_string(MAP_SIZE);
-  std::string rtype = std::string("Map1D<Array=3>=") + std::to_string(MAP_SIZE);
+  // Distinction essentielle : Types Scalaire vs Position
+  std::string scalar_map_type =
+      std::string("Map1D<Scalar>=") + std::to_string(MAP_SIZE);
+  std::string pos_map_type =
+      std::string("Map1D<Pos1D>=") + std::to_string(MAP_SIZE);
 
-  // Let us define the maps
-  auto Wmap = cxsom::builder::map::make_1D("W");
-  auto Hmap = cxsom::builder::map::make_1D("H");
-  auto Rmap = cxsom::builder::map::make_1D("RGB");
+  auto ERRmap = cxsom::builder::map::make_1D("Error");
+  auto VELmap = cxsom::builder::map::make_1D("Velocity");
+  auto THRmap = cxsom::builder::map::make_1D("Thrust");
 
-  // Let us connect the map, using **non-adaptive** layers and the weights
-  // learnt previously, instead of internally defined weights.
-  auto Wc0 = cxsom::builder::variable(
-      "saved", cxsom::builder::name("W") / cxsom::builder::name("Wc-0"), wtype,
-      CACHE, trace, OPENED);
-  auto Wc1 = cxsom::builder::variable(
-      "saved", cxsom::builder::name("W") / cxsom::builder::name("Wc-1"), wtype,
-      CACHE, trace, OPENED);
-  auto Hc0 = cxsom::builder::variable(
-      "saved", cxsom::builder::name("H") / cxsom::builder::name("Wc-0"), wtype,
-      CACHE, trace, OPENED);
-  auto Hc1 = cxsom::builder::variable(
-      "saved", cxsom::builder::name("H") / cxsom::builder::name("Wc-1"), wtype,
-      CACHE, trace, OPENED);
-  auto Rc0 = cxsom::builder::variable(
-      "saved", cxsom::builder::name("RGB") / cxsom::builder::name("Wc-0"),
-      wtype, CACHE, trace, OPENED);
-  auto Rc1 = cxsom::builder::variable(
-      "saved", cxsom::builder::name("RGB") / cxsom::builder::name("Wc-1"),
-      wtype, CACHE, trace, OPENED);
+  // Poids Contextuels (Wc) = Type POS1D
+  auto ERR_c0 = cxsom::builder::variable(
+      "saved", cxsom::builder::name("Error") / cxsom::builder::name("Wc-0"),
+      pos_map_type, CACHE, trace, OPENED);
+  auto ERR_c1 = cxsom::builder::variable(
+      "saved", cxsom::builder::name("Error") / cxsom::builder::name("Wc-1"),
+      pos_map_type, CACHE, trace, OPENED);
+  auto VEL_c0 = cxsom::builder::variable(
+      "saved", cxsom::builder::name("Velocity") / cxsom::builder::name("Wc-0"),
+      pos_map_type, CACHE, trace, OPENED);
+  auto VEL_c1 = cxsom::builder::variable(
+      "saved", cxsom::builder::name("Velocity") / cxsom::builder::name("Wc-1"),
+      pos_map_type, CACHE, trace, OPENED);
+  auto THR_c0 = cxsom::builder::variable(
+      "saved", cxsom::builder::name("Thrust") / cxsom::builder::name("Wc-0"),
+      pos_map_type, CACHE, trace, OPENED);
+  auto THR_c1 = cxsom::builder::variable(
+      "saved", cxsom::builder::name("Thrust") / cxsom::builder::name("Wc-1"),
+      pos_map_type, CACHE, trace, OPENED);
 
-  // These calls build up non adaptive layers, using external weights.
-  Wmap->contextual(Hmap, fx::match_gaussian, p.match_ctx, Wc0, saved_weight_at);
-  Wmap->contextual(Rmap, fx::match_gaussian, p.match_ctx, Wc1, saved_weight_at);
-  Hmap->contextual(Wmap, fx::match_gaussian, p.match_ctx, Hc0, saved_weight_at);
-  Hmap->contextual(Rmap, fx::match_gaussian, p.match_ctx, Hc1, saved_weight_at);
-  Rmap->contextual(Wmap, fx::match_gaussian, p.match_ctx, Rc0, saved_weight_at);
-  Rmap->contextual(Hmap, fx::match_gaussian, p.match_ctx, Rc1, saved_weight_at);
+  ERRmap->contextual(VELmap, fx::match_gaussian, p.match_ctx, ERR_c0,
+                     saved_weight_at);
+  ERRmap->contextual(THRmap, fx::match_gaussian, p.match_ctx, ERR_c1,
+                     saved_weight_at);
+  VELmap->contextual(ERRmap, fx::match_gaussian, p.match_ctx, VEL_c0,
+                     saved_weight_at);
+  VELmap->contextual(THRmap, fx::match_gaussian, p.match_ctx, VEL_c1,
+                     saved_weight_at);
+  THRmap->contextual(ERRmap, fx::match_gaussian, p.match_ctx, THR_c0,
+                     saved_weight_at);
+  THRmap->contextual(VELmap, fx::match_gaussian, p.match_ctx, THR_c1,
+                     saved_weight_at);
 
-  // Let us declare the inputs (W, H, RGB) .
-  auto W = cxsom::builder::variable("img", cxsom::builder::name("w"), "Pos1D",
-                                    CACHE, trace, OPENED);
-  auto H = cxsom::builder::variable("img", cxsom::builder::name("h"), "Pos1D",
-                                    CACHE, trace, OPENED);
-  auto RGB = cxsom::builder::variable("img", cxsom::builder::name("rgb"),
-                                      "Array=3", CACHE, trace, OPENED);
-  W->definition();
-  H->definition();
-  RGB->definition();
+  auto ERR = cxsom::builder::variable("img", cxsom::builder::name("error"),
+                                      "Scalar", CACHE, trace, OPENED);
+  auto VEL = cxsom::builder::variable("img", cxsom::builder::name("velocity"),
+                                      "Scalar", CACHE, trace, OPENED);
+  auto THR = cxsom::builder::variable("img", cxsom::builder::name("thrust"),
+                                      "Scalar", CACHE, trace, OPENED);
+  ERR->definition();
+  VEL->definition();
+  THR->definition();
 
-  // Let us provide inputs to W, H and RGB maps, using weights learnt previously
-  // as well.
-  auto We0 = cxsom::builder::variable(
-      "saved", cxsom::builder::name("W") / cxsom::builder::name("We-0"), wtype,
-      CACHE, trace, OPENED);
-  auto He0 = cxsom::builder::variable(
-      "saved", cxsom::builder::name("H") / cxsom::builder::name("We-0"), wtype,
-      CACHE, trace, OPENED);
-  auto Re0 = cxsom::builder::variable(
-      "saved", cxsom::builder::name("RGB") / cxsom::builder::name("We-0"),
-      rtype, CACHE, trace, OPENED);
+  std::string data_map_type =
+      std::string("Map1D<Scalar>=") + std::to_string(data_size);
+  auto FILE_ERR = cxsom::builder::variable(
+      "img", cxsom::builder::name("error_data"), data_map_type, 1, 1, OPENED);
+  auto FILE_VEL =
+      cxsom::builder::variable("img", cxsom::builder::name("velocity_data"),
+                               data_map_type, 1, 1, OPENED);
+  auto FILE_THR = cxsom::builder::variable(
+      "img", cxsom::builder::name("thrust_data"), data_map_type, 1, 1, OPENED);
 
-  // We expose the value of the external weights at each BMU... This
-  // is the checking. This has to be close to the input. Using the
-  // cxsom::builder::expose::weight tag for a layer means that we have
-  // a variable computing weight(bmu) for that layer.
-  Wmap->external(W, fx::match_gaussian, p.match_pos, We0, saved_weight_at) |
+  auto INDEX =
+      cxsom::builder::variable("check-out", cxsom::builder::name("index"),
+                               "Pos1D", CACHE, trace, OPENED);
+  INDEX->definition();
+  INDEX->var() << fx::random() | kwd::use("walltime", 0);
+
+  ERR->var() << fx::value_at(kwd::at(FILE_ERR->var(), 0), INDEX->var()) |
+      kwd::use("walltime", FOREVER);
+  VEL->var() << fx::value_at(kwd::at(FILE_VEL->var(), 0), INDEX->var()) |
+      kwd::use("walltime", FOREVER);
+  THR->var() << fx::value_at(kwd::at(FILE_THR->var(), 0), INDEX->var()) |
+      kwd::use("walltime", FOREVER);
+
+  // Poids Externes (We) = Type SCALAR
+  auto ERR_e0 = cxsom::builder::variable(
+      "saved", cxsom::builder::name("Error") / cxsom::builder::name("We-0"),
+      scalar_map_type, CACHE, trace, OPENED);
+  auto VEL_e0 = cxsom::builder::variable(
+      "saved", cxsom::builder::name("Velocity") / cxsom::builder::name("We-0"),
+      scalar_map_type, CACHE, trace, OPENED);
+  auto THR_e0 = cxsom::builder::variable(
+      "saved", cxsom::builder::name("Thrust") / cxsom::builder::name("We-0"),
+      scalar_map_type, CACHE, trace, OPENED);
+
+  ERRmap->external(ERR, fx::match_gaussian, p.match_state, ERR_e0,
+                   saved_weight_at) |
       cxsom::builder::expose::weight;
-  Hmap->external(H, fx::match_gaussian, p.match_pos, He0, saved_weight_at) |
+  VELmap->external(VEL, fx::match_gaussian, p.match_state, VEL_e0,
+                   saved_weight_at) |
       cxsom::builder::expose::weight;
-  Rmap->external(RGB, fx::match_gaussian, p.match_rgb, Re0, saved_weight_at) |
+  THRmap->external(THR, fx::match_gaussian, p.match_thrust, THR_e0,
+                   saved_weight_at) |
       cxsom::builder::expose::weight;
 
-  // We define all the external weights, for the sake of comprehensive
-  // graphs when the architecture is displayed.
-  We0->definition();
-  Wc0->definition();
-  Wc1->definition();
-  He0->definition();
-  Hc0->definition();
-  Hc1->definition();
-  Re0->definition();
-  Rc0->definition();
-  Rc1->definition();
+  ERR_e0->definition();
+  ERR_c0->definition();
+  ERR_c1->definition();
+  VEL_e0->definition();
+  VEL_c0->definition();
+  VEL_c1->definition();
+  THR_e0->definition();
+  THR_c0->definition();
+  THR_c1->definition();
 
-  // Let us build up and configure the architecture
-  archi << Wmap << Hmap << Rmap;
+  archi << ERRmap << VELmap << THRmap;
   *archi = map_settings;
 
-  // We can now produce the cxsom rules and the description graph.
   archi->realize();
   {
     std::ofstream dot_file("check.dot");
@@ -400,106 +410,126 @@ void make_check_rules(unsigned int saved_weight_at, unsigned int img_side) {
 // #               #
 // #################
 
-void make_predict_rules(unsigned int saved_weight_at, unsigned int img_side) {
+void make_predict_rules(unsigned int saved_weight_at, unsigned int data_size) {
 
   Params p;
   auto map_settings = make_map_settings(p);
-
   auto archi = cxsom::builder::architecture();
   archi->timelines = {"predict-wgt", "predict-rlx", "predict-out"};
 
-  // Let us retrieve the feature of the weight variables (only for
-  // those who host Pos1D prototypes here).
-  std::string wtype = std::string("Map1D<Pos1D>=") + std::to_string(MAP_SIZE);
-  std::string rtype = std::string("Map1D<Array=3>=") + std::to_string(MAP_SIZE);
-  unsigned int trace = img_side * img_side;
+  // Distinction essentielle
+  std::string scalar_map_type =
+      std::string("Map1D<Scalar>=") + std::to_string(MAP_SIZE);
+  std::string pos_map_type =
+      std::string("Map1D<Pos1D>=") + std::to_string(MAP_SIZE);
+  unsigned int trace = data_size;
 
-  // Let us define the maps
-  auto Wmap = cxsom::builder::map::make_1D("W");
-  auto Hmap = cxsom::builder::map::make_1D("H");
-  auto Rmap = cxsom::builder::map::make_1D("RGB");
+  auto ERRmap = cxsom::builder::map::make_1D("Error");
+  auto VELmap = cxsom::builder::map::make_1D("Velocity");
+  auto THRmap = cxsom::builder::map::make_1D("Thrust");
 
-  // Let us connect the map, using non-adaptive layers and the weights
-  // learnt previously, instead of internally defined weights.
-  auto Wc0 = cxsom::builder::variable(
-      "saved", cxsom::builder::name("W") / cxsom::builder::name("Wc-0"), wtype,
-      CACHE, trace, OPENED);
-  auto Wc1 = cxsom::builder::variable(
-      "saved", cxsom::builder::name("W") / cxsom::builder::name("Wc-1"), wtype,
-      CACHE, trace, OPENED);
-  auto Hc0 = cxsom::builder::variable(
-      "saved", cxsom::builder::name("H") / cxsom::builder::name("Wc-0"), wtype,
-      CACHE, trace, OPENED);
-  auto Hc1 = cxsom::builder::variable(
-      "saved", cxsom::builder::name("H") / cxsom::builder::name("Wc-1"), wtype,
-      CACHE, trace, OPENED);
-  auto Rc0 = cxsom::builder::variable(
-      "saved", cxsom::builder::name("RGB") / cxsom::builder::name("Wc-0"),
-      wtype, CACHE, trace, OPENED);
-  auto Rc1 = cxsom::builder::variable(
-      "saved", cxsom::builder::name("RGB") / cxsom::builder::name("Wc-1"),
-      wtype, CACHE, trace, OPENED);
-  Wmap->contextual(Hmap, fx::match_gaussian, p.match_pos, Wc0, saved_weight_at);
-  Wmap->contextual(Rmap, fx::match_gaussian, p.match_pos, Wc1, saved_weight_at);
-  Hmap->contextual(Wmap, fx::match_gaussian, p.match_pos, Hc0, saved_weight_at);
-  Hmap->contextual(Rmap, fx::match_gaussian, p.match_pos, Hc1, saved_weight_at);
-  Rmap->contextual(Wmap, fx::match_gaussian, p.match_pos, Rc0, saved_weight_at);
-  Rmap->contextual(Hmap, fx::match_gaussian, p.match_pos, Rc1, saved_weight_at);
+  // Poids Contextuels (Wc) = Type POS1D
+  auto ERR_c0 = cxsom::builder::variable(
+      "saved", cxsom::builder::name("Error") / cxsom::builder::name("Wc-0"),
+      pos_map_type, CACHE, trace, OPENED);
+  auto ERR_c1 = cxsom::builder::variable(
+      "saved", cxsom::builder::name("Error") / cxsom::builder::name("Wc-1"),
+      pos_map_type, CACHE, trace, OPENED);
+  auto VEL_c0 = cxsom::builder::variable(
+      "saved", cxsom::builder::name("Velocity") / cxsom::builder::name("Wc-0"),
+      pos_map_type, CACHE, trace, OPENED);
+  auto VEL_c1 = cxsom::builder::variable(
+      "saved", cxsom::builder::name("Velocity") / cxsom::builder::name("Wc-1"),
+      pos_map_type, CACHE, trace, OPENED);
+  auto THR_c0 = cxsom::builder::variable(
+      "saved", cxsom::builder::name("Thrust") / cxsom::builder::name("Wc-0"),
+      pos_map_type, CACHE, trace, OPENED);
+  auto THR_c1 = cxsom::builder::variable(
+      "saved", cxsom::builder::name("Thrust") / cxsom::builder::name("Wc-1"),
+      pos_map_type, CACHE, trace, OPENED);
 
-  // Let us declare the inputs (W, H) and the output (RGB).
-  auto W = cxsom::builder::variable("img", cxsom::builder::name("w"), "Pos1D",
-                                    CACHE, trace, OPENED);
-  auto H = cxsom::builder::variable("img", cxsom::builder::name("h"), "Pos1D",
-                                    CACHE, trace, OPENED);
-  auto RGB =
-      cxsom::builder::variable("predict-out", cxsom::builder::name("rgb"),
-                               "Array=3", CACHE, trace, OPENED);
-  W->definition();
-  H->definition();
-  RGB->definition();
+  ERRmap->contextual(VELmap, fx::match_gaussian, p.match_state, ERR_c0,
+                     saved_weight_at);
+  ERRmap->contextual(THRmap, fx::match_gaussian, p.match_state, ERR_c1,
+                     saved_weight_at);
+  VELmap->contextual(ERRmap, fx::match_gaussian, p.match_state, VEL_c0,
+                     saved_weight_at);
+  VELmap->contextual(THRmap, fx::match_gaussian, p.match_state, VEL_c1,
+                     saved_weight_at);
+  THRmap->contextual(ERRmap, fx::match_gaussian, p.match_state, THR_c0,
+                     saved_weight_at);
+  THRmap->contextual(VELmap, fx::match_gaussian, p.match_state, THR_c1,
+                     saved_weight_at);
 
-  // Let us provide inputs to W, and H maps, using weights learnt previously as
-  // well.
-  auto We0 = cxsom::builder::variable(
-      "saved", cxsom::builder::name("W") / cxsom::builder::name("We-0"), wtype,
-      CACHE, trace, OPENED);
-  auto He0 = cxsom::builder::variable(
-      "saved", cxsom::builder::name("H") / cxsom::builder::name("We-0"), wtype,
-      CACHE, trace, OPENED);
-  auto Re0 = cxsom::builder::variable(
-      "saved", cxsom::builder::name("RGB") / cxsom::builder::name("We-0"),
-      rtype, CACHE, trace, OPENED);
-  Wmap->external(W, fx::match_gaussian, p.match_ctx, We0, saved_weight_at);
-  Hmap->external(H, fx::match_gaussian, p.match_ctx, He0, saved_weight_at);
+  auto ERR = cxsom::builder::variable("img", cxsom::builder::name("error"),
+                                      "Scalar", CACHE, trace, OPENED);
+  auto VEL = cxsom::builder::variable("img", cxsom::builder::name("velocity"),
+                                      "Scalar", CACHE, trace, OPENED);
+  // On renomme "rgb" en "predicted-thrust"
+  auto THR_OUT = cxsom::builder::variable(
+      "predict-out", cxsom::builder::name("predicted-thrust"), "Scalar", CACHE,
+      trace, OPENED);
 
-  // We define all the external weights, for the sake of comprehensive
-  // graphs when the architecture is displayed.
-  We0->definition();
-  Wc0->definition();
-  Wc1->definition();
-  He0->definition();
-  Hc0->definition();
-  Hc1->definition();
-  Re0->definition();
-  Rc0->definition();
-  Rc1->definition();
+  ERR->definition();
+  VEL->definition();
+  THR_OUT->definition();
 
-  // Let us build up and configure the architecture
-  archi << Wmap << Hmap << Rmap;
+  std::string data_map_type =
+      std::string("Map1D<Scalar>=") + std::to_string(data_size);
+  auto FILE_ERR = cxsom::builder::variable(
+      "img", cxsom::builder::name("error_data"), data_map_type, 1, 1, OPENED);
+  auto FILE_VEL =
+      cxsom::builder::variable("img", cxsom::builder::name("velocity_data"),
+                               data_map_type, 1, 1, OPENED);
+
+  auto INDEX =
+      cxsom::builder::variable("predict-out", cxsom::builder::name("index"),
+                               "Pos1D", CACHE, trace, OPENED);
+  INDEX->definition();
+  INDEX->var() << fx::random() | kwd::use("walltime", 0);
+
+  ERR->var() << fx::value_at(kwd::at(FILE_ERR->var(), 0), INDEX->var()) |
+      kwd::use("walltime", FOREVER);
+  VEL->var() << fx::value_at(kwd::at(FILE_VEL->var(), 0), INDEX->var()) |
+      kwd::use("walltime", FOREVER);
+
+  // Poids Externes (We) = Type SCALAR
+  auto ERR_e0 = cxsom::builder::variable(
+      "saved", cxsom::builder::name("Error") / cxsom::builder::name("We-0"),
+      scalar_map_type, CACHE, trace, OPENED);
+  auto VEL_e0 = cxsom::builder::variable(
+      "saved", cxsom::builder::name("Velocity") / cxsom::builder::name("We-0"),
+      scalar_map_type, CACHE, trace, OPENED);
+  auto THR_e0 = cxsom::builder::variable(
+      "saved", cxsom::builder::name("Thrust") / cxsom::builder::name("We-0"),
+      scalar_map_type, CACHE, trace, OPENED);
+
+  ERRmap->external(ERR, fx::match_gaussian, p.match_ctx, ERR_e0,
+                   saved_weight_at);
+  VELmap->external(VEL, fx::match_gaussian, p.match_ctx, VEL_e0,
+                   saved_weight_at);
+
+  ERR_e0->definition();
+  VEL_e0->definition();
+  THR_e0->definition();
+  ERR_c0->definition();
+  ERR_c1->definition();
+  VEL_c0->definition();
+  VEL_c1->definition();
+  THR_c0->definition();
+  THR_c1->definition();
+
+  archi << ERRmap << VELmap << THRmap;
   *archi = map_settings;
 
-  // We can now produce the cxsom rules and the description graph.
   archi->realize();
   {
     std::ofstream dot_file("predict.dot");
     dot_file << archi->write_dot;
   }
 
-  // Now, we need supplementary rules for reading the RGB
-  // result. Indeed, it consists in using the BMU of the RGB map to
-  // index the learnt RGB weights.
-  RGB->var() << fx::value_at(kwd::at(Re0->var(), saved_weight_at),
-                             Rmap->output_BMU()->var()) |
+  THR_OUT->var() << fx::value_at(kwd::at(THR_e0->var(), saved_weight_at),
+                                 THRmap->output_BMU()->var()) |
       kwd::use("walltime", FOREVER);
 }
 
@@ -514,42 +544,25 @@ int main(int argc, char *argv[]) {
   Mode mode;
   unsigned int walltime = 0;
   unsigned int grid_side = 0;
-  unsigned int img_side = 0;
+  unsigned int data_size = 0;
   unsigned int save_period = 0;
   unsigned int saved_weight_at = 0;
 
-  // We analyse the arguments and identify the mode.
   std::ostringstream prefix;
   for (const auto &arg : c.argv)
     prefix << arg << ' ';
   prefix << "-- ";
 
   if (c.user_argv.size() == 0) {
-    std::cout << "You have to provide user arguments." << std::endl
-              << "e.g:" << std::endl
-              << "  " << prefix.str()
-              << "calibration <grid-side>            <-- sends the rules for "
-                 "calibration."
+    std::cout << "Usage:" << std::endl
+              << "  " << prefix.str() << "calibration <grid-side>" << std::endl
+              << "  " << prefix.str() << "walltime <max-time>" << std::endl
+              << "  " << prefix.str() << "input <dummy>" << std::endl
+              << "  " << prefix.str() << "train <save-period> <data-size>"
               << std::endl
-              << "  " << prefix.str()
-              << "walltime <max-time>                <-- sends the rules for "
-                 "the inputs wall-time redefinition."
+              << "  " << prefix.str() << "check <saved-weight-at> <data-size>"
               << std::endl
-              << "  " << prefix.str()
-              << "input <img-side>                   <-- sends the rules for "
-                 "the inputs."
-              << std::endl
-              << "  " << prefix.str()
-              << "train <save-period> <img-side>     <-- sends the rules for "
-                 "training."
-              << std::endl
-              << "  " << prefix.str()
-              << "check <saved-weight-at> <img-side> <-- sends the rules for "
-                 "checking."
-              << std::endl
-              << "  " << prefix.str()
-              << "predict <saved-weight-at>          <-- sends the rules for "
-                 "predicting."
+              << "  " << prefix.str() << "predict <saved-weight-at> <data-size>"
               << std::endl;
     c.notify_user_argv_error();
     return 0;
@@ -557,8 +570,6 @@ int main(int argc, char *argv[]) {
 
   if (c.user_argv[0] == "calibration") {
     if (c.user_argv.size() != 2) {
-      std::cout << "The 'calibration' mode expects a grid_side argument"
-                << std::endl;
       c.notify_user_argv_error();
       return 0;
     }
@@ -566,52 +577,38 @@ int main(int argc, char *argv[]) {
     mode = Mode::Calibration;
   } else if (c.user_argv[0] == "walltime") {
     if (c.user_argv.size() != 2) {
-      std::cout << "The 'walltime' mode expects a max-time argument"
-                << std::endl;
       c.notify_user_argv_error();
       return 0;
     }
     walltime = stoul(c.user_argv[1]);
     mode = Mode::Walltime;
   } else if (c.user_argv[0] == "input") {
-    if (c.user_argv.size() != 2) {
-      std::cout << "The 'input' mode expects a img-side argument" << std::endl;
-      c.notify_user_argv_error();
-      return 0;
-    }
-    img_side = stoul(c.user_argv[1]);
+    if (c.user_argv.size() >= 2)
+      data_size = stoul(c.user_argv[1]);
     mode = Mode::Input;
   } else if (c.user_argv[0] == "train") {
     if (c.user_argv.size() != 3) {
-      std::cout << "The 'train' mode expects save-period and img-side arguments"
-                << std::endl;
       c.notify_user_argv_error();
       return 0;
     }
     save_period = stoul(c.user_argv[1]);
-    img_side = stoul(c.user_argv[2]);
+    data_size = stoul(c.user_argv[2]);
     mode = Mode::Train;
   } else if (c.user_argv[0] == "check") {
     if (c.user_argv.size() != 3) {
-      std::cout
-          << "The 'check' mode expects saved-weight-at and img-side arguments"
-          << std::endl;
       c.notify_user_argv_error();
       return 0;
     }
     saved_weight_at = stoul(c.user_argv[1]);
-    img_side = stoul(c.user_argv[2]);
+    data_size = stoul(c.user_argv[2]);
     mode = Mode::Check;
   } else if (c.user_argv[0] == "predict") {
     if (c.user_argv.size() != 3) {
-      std::cout
-          << "The 'predict' mode expects saved-weight-at and img-side arguments"
-          << std::endl;
       c.notify_user_argv_error();
       return 0;
     }
     saved_weight_at = stoul(c.user_argv[1]);
-    img_side = stoul(c.user_argv[2]);
+    data_size = stoul(c.user_argv[2]);
     mode = Mode::Predict;
   } else {
     std::cout << "Bad user arguments." << std::endl;
@@ -627,16 +624,16 @@ int main(int argc, char *argv[]) {
     make_walltime_rules(walltime);
     break;
   case Mode::Input:
-    make_input_rules(img_side);
+    make_input_rules(data_size);
     break;
   case Mode::Train:
-    make_train_rules(save_period, img_side);
+    make_train_rules(save_period, data_size);
     break;
   case Mode::Predict:
-    make_predict_rules(saved_weight_at, img_side);
+    make_predict_rules(saved_weight_at, data_size);
     break;
   case Mode::Check:
-    make_check_rules(saved_weight_at, img_side);
+    make_check_rules(saved_weight_at, data_size);
     break;
   default:
     break;
