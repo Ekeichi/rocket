@@ -354,7 +354,7 @@ void make_check_rules(unsigned int saved_weight_at, unsigned int data_size) {
       cxsom::builder::variable("check-out", cxsom::builder::name("index"),
                                "Pos1D", CACHE, trace, OPENED);
   INDEX->definition();
-  INDEX->var() << fx::random() | kwd::use("walltime", 0);
+  INDEX->var() << fx::random() | kwd::use("walltime", data_size);
 
   ERR->var() << fx::value_at(kwd::at(FILE_ERR->var(), 0), INDEX->var()) |
       kwd::use("walltime", FOREVER);
@@ -486,7 +486,7 @@ void make_predict_rules(unsigned int saved_weight_at, unsigned int data_size) {
       cxsom::builder::variable("predict-out", cxsom::builder::name("index"),
                                "Pos1D", CACHE, trace, OPENED);
   INDEX->definition();
-  INDEX->var() << fx::random() | kwd::use("walltime", 0);
+  INDEX->var() << fx::random() | kwd::use("walltime", data_size);
 
   ERR->var() << fx::value_at(kwd::at(FILE_ERR->var(), 0), INDEX->var()) |
       kwd::use("walltime", FOREVER);
