@@ -33,15 +33,17 @@ def extract_scalar(gen):
         else:
             yield float(value)
 
-W = np.fromiter(extract_scalar(cx.variable.data_range_full(cx.variable.path_from(root_dir, w_timeline  , w_varname  ))), float)
-H = np.fromiter(extract_scalar(cx.variable.data_range_full(cx.variable.path_from(root_dir, h_timeline  , h_varname  ))), float)
-C = np.fromiter(extract_scalar(cx.variable.data_range_full(cx.variable.path_from(root_dir, rgb_timeline, rgb_varname))), float)
+Error = np.fromiter(extract_scalar(cx.variable.data_range_full(cx.variable.path_from(root_dir, w_timeline  , w_varname  ))), float)
+Velocity = np.fromiter(extract_scalar(cx.variable.data_range_full(cx.variable.path_from(root_dir, h_timeline  , h_varname  ))), float)
+Thrust = np.fromiter(extract_scalar(cx.variable.data_range_full(cx.variable.path_from(root_dir, rgb_timeline, rgb_varname))), float)
 
-print(f"Loaded {len(W)} points.")
-if len(W) > 0:
-    print(f"Range W: {W.min()}-{W.max()}")
-    print(f"Range H: {H.min()}-{H.max()}")
-    print(f"Range C: {C.min()}-{C.max()}")
+print(f"Loaded {len(Error)} points.")
+if len(Error) > 0:
+    print(f"Range Error: {Error.min()}-{Error.max()}")
+if len(Velocity) > 0:
+    print(f"Range Velocity: {Velocity.min()}-{Velocity.max()}")
+if len(Thrust) > 0:
+    print(f"Range Thrust: {Thrust.min()}-{Thrust.max()}")
 
 plt.figure(figsize=(10,10))
 if frame_id is None:
@@ -50,7 +52,11 @@ plt.xlim(0,1)
 plt.ylim(0,1)
 plt.xlabel('Error')
 plt.ylabel('Velocity')
-plt.scatter(W, 1 - H, c=C, cmap='viridis')
+if len(Error) > 0 and len(Error) == len(Velocity):
+    if len(Thrust) == len(Error):
+        plt.scatter(Error, 1 - Velocity, c=Thrust, cmap='viridis')
+    else:
+        plt.scatter(Error, 1 - Velocity)
 plt.colorbar(label='Thrust')
 if frame_id is None:
     plt.show()

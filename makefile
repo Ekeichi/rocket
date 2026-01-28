@@ -22,7 +22,6 @@ help:
 	@echo "make train-setup SAVE_PERIOD=100 DATA_SIZE=2601    <-- sets up training rules, saving weights periodically."
 	@echo "make feed-train-inputs WALLTIME=30000              <-- feed inputs for training."
 	@echo "make show-weights-history       	                  <-- displays the saved weights."
-	@echo "make show-rgb-mapping                              <-- displays the color map encoding by the Thrust map."
 	@echo "make clear-training                                <-- clears training variables (training cannot be continued further)."
 	@echo "make clear-saved-weights                           <-- Danger zone ! You will loose the training result."
 	@echo
@@ -128,9 +127,7 @@ feed-train-inputs:
 show-weights-history:
 	@python show-weights-history.py `cat .cxsom-rootdir-config`
 
-.PHONY: show-rgb-mapping
-show-rgb-mapping:
-	@python show-rgb-mapping.py `cat .cxsom-rootdir-config`
+
 
 .PHONY: clear-training
 clear-training:
@@ -161,7 +158,7 @@ check:
 
 .PHONY: show-checks
 show-checks:
-	@python3 show-samples.py `cat .cxsom-rootdir-config` check-out 'Error/We-0' check-out 'Velocity/We-0' check-out 'Thrust/We-0' ${FRAME_ID}
+	@python3 show-samples.py `cat .cxsom-rootdir-config` img error_data img velocity_data img thrust_data ${FRAME_ID}
 
 .PHONY: show-predict-rules
 show-predict-rules:
@@ -183,7 +180,7 @@ predict:
 
 .PHONY: show-predictions
 show-predictions:
-	@python3 show-samples.py `cat .cxsom-rootdir-config` img error_data img velocity_data predict-out predicted-thrust ${FRAME_ID}
+	@python3 show-samples.py `cat .cxsom-rootdir-config` img error img velocity predict-out predicted-thrust ${FRAME_ID}
 
 
 .PHONY: reconstruct-image
