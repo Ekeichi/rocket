@@ -107,12 +107,12 @@ clear-samples:
 
 .PHONY: train-setup
 train-setup:
-	@./xsom send `cat .cxsom-hostname-config` `cat .cxsom-port-config` -- train ${SAVE_PERIOD} ${DATA_SIZE}
+	@./xsom send `cat .cxsom-hostname-config` `cat .cxsom-port-config` -- train ${SAVE_PERIOD} ${DATA_SIZE} 500
 
 
 .PHONY: show-train-rules
 show-train-rules:
-	@./xsom graph-full train -- train 100 100
+	@./xsom graph-full train -- train 100 100 100
 	@dot -Tpdf train.dot -o train.pdf
 	@sfdp -Tpdf -Goverlap=prism train-updates.dot -o train-updates.pdf
 	@sfdp -Tpdf -Goverlap=prism train-inits.dot -o train-inits.pdf
@@ -143,7 +143,7 @@ clear-saved-weights:
 
 .PHONY: show-check-rules
 show-check-rules:
-	@./xsom graph check -- check 100 100
+	@./xsom graph check -- check 100 100 100
 	@dot -Tpdf check.dot -o check.pdf
 	@dot -Tpdf check-updates.dot -o check-updates.pdf
 	@dot -Tpdf check-inits.dot -o check-inits.pdf
@@ -156,16 +156,16 @@ clear-checks:
 
 .PHONY: check
 check:
-	@./xsom send `cat .cxsom-hostname-config` `cat .cxsom-port-config` -- check ${WEIGHTS_AT} ${DATA_SIZE}
+	@./xsom send `cat .cxsom-hostname-config` `cat .cxsom-port-config` -- check ${WEIGHTS_AT} ${DATA_SIZE} 500
 	@make --quiet cxsom-ping-processor
 
 .PHONY: show-checks
 show-checks:
-	@python3 show-samples.py `cat .cxsom-rootdir-config` check-out 'W/We-0' check-out 'H/We-0' check-out 'Thrust/We-0' ${FRAME_ID}
+	@python3 show-samples.py `cat .cxsom-rootdir-config` check-out 'Error/We-0' check-out 'Velocity/We-0' check-out 'Thrust/We-0' ${FRAME_ID}
 
 .PHONY: show-predict-rules
 show-predict-rules:
-	@./xsom graph predict -- predict 100 100
+	@./xsom graph predict -- predict 100 100 100
 	@dot -Tpdf predict.dot -o predict.pdf
 	@dot -Tpdf predict-updates.dot -o predict-updates.pdf
 	@dot -Tpdf predict-inits.dot -o predict-inits.pdf
@@ -178,7 +178,7 @@ clear-predictions:
 
 .PHONY: predict
 predict:
-	@./xsom send `cat .cxsom-hostname-config` `cat .cxsom-port-config` -- predict ${WEIGHTS_AT} ${DATA_SIZE}
+	@./xsom send `cat .cxsom-hostname-config` `cat .cxsom-port-config` -- predict ${WEIGHTS_AT} ${DATA_SIZE} 500
 	@make --quiet cxsom-ping-processor
 
 .PHONY: show-predictions

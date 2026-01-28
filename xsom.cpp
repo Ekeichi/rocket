@@ -22,9 +22,7 @@
 #define OPEN_AS_NEEDED false
 #define FORGET 0
 #define FOREVER -1 // Infinite walltime
-#define DEADLINE 100
-
-#define MAP_SIZE 500
+#define DEADLINE 1000
 
 // cxsom declarations
 using namespace cxsom::rules;
@@ -68,9 +66,9 @@ struct Params {
   }
 };
 
-auto make_map_settings(const Params &p) {
+auto make_map_settings(const Params &p, unsigned int map_size) {
   auto map_settings = cxsom::builder::map::make_settings();
-  map_settings.map_size = MAP_SIZE;
+  map_settings.map_size = map_size;
   map_settings.cache_size = CACHE;
   map_settings.weights_file_size = TRAIN_TRACE;
   map_settings.kept_opened = OPENED;
@@ -185,10 +183,11 @@ void make_input_rules(unsigned int data_size) {
 // #             #
 // ###############
 
-void make_train_rules(unsigned int save_period, unsigned int data_size) {
+void make_train_rules(unsigned int save_period, unsigned int data_size,
+                      unsigned int map_size) {
 
   Params p;
-  auto map_settings = make_map_settings(p);
+  auto map_settings = make_map_settings(p, map_size);
 
   auto archi = cxsom::builder::architecture();
   archi->timelines = {"train-wgt", "train-rlx", "train-out"};
@@ -277,11 +276,12 @@ void make_train_rules(unsigned int save_period, unsigned int data_size) {
 // #             #
 // ###############
 
-void make_check_rules(unsigned int saved_weight_at, unsigned int data_size) {
+void make_check_rules(unsigned int saved_weight_at, unsigned int data_size,
+                      unsigned int map_size) {
 
   unsigned int trace = data_size;
   Params p;
-  auto map_settings = make_map_settings(p);
+  auto map_settings = make_map_settings(p, map_size);
   map_settings.exposure_file_size = trace;
 
   auto archi = cxsom::builder::architecture();
@@ -289,9 +289,9 @@ void make_check_rules(unsigned int saved_weight_at, unsigned int data_size) {
 
   // Distinction essentielle : Types Scalaire vs Position
   std::string scalar_map_type =
-      std::string("Map1D<Scalar>=") + std::to_string(MAP_SIZE);
+      std::string("Map1D<Scalar>=") + std::to_string(map_size);
   std::string pos_map_type =
-      std::string("Map1D<Pos1D>=") + std::to_string(MAP_SIZE);
+      std::string("Map1D<Pos1D>=") + std::to_string(map_size);
 
   auto ERRmap = cxsom::builder::map::make_1D("Error");
   auto VELmap = cxsom::builder::map::make_1D("Velocity");
@@ -410,18 +410,19 @@ void make_check_rules(unsigned int saved_weight_at, unsigned int data_size) {
 // #               #
 // #################
 
-void make_predict_rules(unsigned int saved_weight_at, unsigned int data_size) {
+void make_predict_rules(unsigned int saved_weight_at, unsigned int data_size,
+                        unsigned int map_size) {
 
   Params p;
-  auto map_settings = make_map_settings(p);
+  auto map_settings = make_map_settings(p, map_size);
   auto archi = cxsom::builder::architecture();
   archi->timelines = {"predict-wgt", "predict-rlx", "predict-out"};
 
   // Distinction essentielle
   std::string scalar_map_type =
-      std::string("Map1D<Scalar>=") + std::to_string(MAP_SIZE);
+      std::string("Map1D<Scalar>=") + std::to_string(map_size);
   std::string pos_map_type =
-      std::string("Map1D<Pos1D>=") + std::to_string(MAP_SIZE);
+      std::string("Map1D<Pos1D>=") + std::to_string(map_size);
   unsigned int trace = data_size;
 
   auto ERRmap = cxsom::builder::map::make_1D("Error");
@@ -547,6 +548,7 @@ int main(int argc, char *argv[]) {
   unsigned int data_size = 0;
   unsigned int save_period = 0;
   unsigned int saved_weight_at = 0;
+  unsigned int map_size = 0;
 
   std::ostringstream prefix;
   for (const auto &arg : c.argv)
@@ -558,11 +560,12 @@ int main(int argc, char *argv[]) {
               << "  " << prefix.str() << "calibration <grid-side>" << std::endl
               << "  " << prefix.str() << "walltime <max-time>" << std::endl
               << "  " << prefix.str() << "input <dummy>" << std::endl
-              << "  " << prefix.str() << "train <save-period> <data-size>"
-              << std::endl
-              << "  " << prefix.str() << "check <saved-weight-at> <data-size>"
-              << std::endl
-              << "  " << prefix.str() << "predict <saved-weight-at> <data-size>"
+              << "  " << prefix.str()
+              << "train <save-period> <data-size> <map-size>" << std::endl
+              << "  " << prefix.str()
+              << "check <saved-weight-at> <data-size> <map-size>" << std::endl
+              << "  " << prefix.str()
+              << "predict <saved-weight-at> <data-size> <map-size>"
               << std::endl;
     c.notify_user_argv_error();
     return 0;
@@ -587,28 +590,31 @@ int main(int argc, char *argv[]) {
       data_size = stoul(c.user_argv[1]);
     mode = Mode::Input;
   } else if (c.user_argv[0] == "train") {
-    if (c.user_argv.size() != 3) {
+    if (c.user_argv.size() != 4) {
       c.notify_user_argv_error();
       return 0;
     }
     save_period = stoul(c.user_argv[1]);
     data_size = stoul(c.user_argv[2]);
+    map_size = stoul(c.user_argv[3]);
     mode = Mode::Train;
   } else if (c.user_argv[0] == "check") {
-    if (c.user_argv.size() != 3) {
+    if (c.user_argv.size() != 4) {
       c.notify_user_argv_error();
       return 0;
     }
     saved_weight_at = stoul(c.user_argv[1]);
     data_size = stoul(c.user_argv[2]);
+    map_size = stoul(c.user_argv[3]);
     mode = Mode::Check;
   } else if (c.user_argv[0] == "predict") {
-    if (c.user_argv.size() != 3) {
+    if (c.user_argv.size() != 4) {
       c.notify_user_argv_error();
       return 0;
     }
     saved_weight_at = stoul(c.user_argv[1]);
     data_size = stoul(c.user_argv[2]);
+    map_size = stoul(c.user_argv[3]);
     mode = Mode::Predict;
   } else {
     std::cout << "Bad user arguments." << std::endl;
@@ -627,13 +633,13 @@ int main(int argc, char *argv[]) {
     make_input_rules(data_size);
     break;
   case Mode::Train:
-    make_train_rules(save_period, data_size);
+    make_train_rules(save_period, data_size, map_size);
     break;
   case Mode::Predict:
-    make_predict_rules(saved_weight_at, data_size);
+    make_predict_rules(saved_weight_at, data_size, map_size);
     break;
   case Mode::Check:
-    make_check_rules(saved_weight_at, data_size);
+    make_check_rules(saved_weight_at, data_size, map_size);
     break;
   default:
     break;
