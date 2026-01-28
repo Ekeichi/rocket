@@ -1,7 +1,7 @@
 import numpy as np
 
 try:
-    data = np.loadtxt('/home/antoine/Bureau/pfe/pfe/dev/data/rocket-discrete-controller.dat')
+    data = np.loadtxt('data/rocket-discrete-controller.dat')
     print("Data shape:", data.shape)
     print("Col 0 (Error) min/max:", data[:, 0].min(), data[:, 0].max())
     print("Col 1 (Velocity) min/max:", data[:, 1].min(), data[:, 1].max())

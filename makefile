@@ -183,7 +183,7 @@ predict:
 
 .PHONY: show-predictions
 show-predictions:
-	@python3 show-samples.py `cat .cxsom-rootdir-config` img error_data img velocity_data predict-out thrust ${FRAME_ID}
+	@python3 show-samples.py `cat .cxsom-rootdir-config` img error_data img velocity_data predict-out predicted-thrust ${FRAME_ID}
 
 
 .PHONY: reconstruct-image
@@ -205,7 +205,7 @@ one-frame:
 	@make --quiet check predict
 	@sleep 2
 	@python wait_stable.py `cat .cxsom-rootdir-config` check-out 'H/We-0'
-	@python wait_stable.py `cat .cxsom-rootdir-config` predict-out rgb
+	@python wait_stable.py `cat .cxsom-rootdir-config` predict-out predicted-thrust
 	@python make-frame.py  `cat .cxsom-rootdir-config` ${WEIGHTS_AT}
 
 

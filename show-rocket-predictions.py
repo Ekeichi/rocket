@@ -59,7 +59,7 @@ with cx.variable.Realize(pred_path_var) as v_pred, cx.variable.Realize(idx_path_
     data_ready = False
     for i in range(20):
         r = v_pred.time_range()
-        if r is not None and r[1] > 10: 
+        if r is not None and r[1] > 0: 
             data_ready = True
             break
         time.sleep(0.5)
@@ -67,11 +67,11 @@ with cx.variable.Realize(pred_path_var) as v_pred, cx.variable.Realize(idx_path_
     print()
     
     if not data_ready:
-        print("Error: File exists but remains empty (0 bytes).")
+        print(f"Error: No data found in {pred_file_check} (time_range={r}).")
         print("Tip: Restart the processor (make cxsom-kill-processor && make cxsom-launch-processor)")
         sys.exit(1)
 
-    count = r[1]
+    count = r[1] + 1
     print(f"Success! Reading {count} predictions.")
     preds = np.array(v_pred[0:count])
     idxs  = np.array(v_idx[0:count])
