@@ -27,7 +27,6 @@ Le système utilise 3 cartes auto-organisatrices (SOM) interconnectées qui appr
 ├── check.dot                       # Graphe de calcul pour la vérification
 ├── predict.dot                     # Graphe de calcul pour la prédiction
 │
-├── PROCEDURE_LANCEMENT.md          # Procédure détaillée complète
 └── README.md                       # Ce fichier
 ```
 
@@ -126,7 +125,6 @@ make clear-saved-weights     # ⚠️ Supprimer tous les poids sauvegardés
 
 - Code source : [xsom.cpp](xsom.cpp)
 - Makefile : [makefile](makefile)
-- Procédure complète : [PROCEDURE_LANCEMENT.md](PROCEDURE_LANCEMENT.md)
 - Documentation CXSOM : https://github.com/HerveFrezza-Buet/cxsom
 
 ## 📝 Notes
