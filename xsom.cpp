@@ -23,6 +23,7 @@
 #define FORGET 0
 #define FOREVER -1 // Infinite walltime
 #define DEADLINE 1000
+#define DEFAULT_DATA_SIZE 2601
 
 // cxsom declarations
 using namespace cxsom::rules;
@@ -161,8 +162,6 @@ void make_walltime_rules(unsigned int walltime) {
 // ###############
 
 void make_input_rules(unsigned int data_size) {
-  if (data_size == 0)
-    data_size = 2601;
 
   std::string type = std::string("Map1D<Scalar>=") + std::to_string(data_size);
 
